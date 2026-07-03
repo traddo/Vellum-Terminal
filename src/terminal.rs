@@ -32,6 +32,9 @@ impl Dimensions for TermSize {
     }
 }
 
+/// winit 事件循环唤醒回调（线程安全、可选）。
+type WakerFn = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
+
 /// 事件监听器：把 alacritty 的 `Event`（尤其 `Wakeup`）转发出去以触发损伤驱动重绘。
 #[derive(Clone)]
 pub struct EventProxy {
@@ -40,7 +43,7 @@ pub struct EventProxy {
     /// 子进程是否已退出。
     exited: Arc<std::sync::atomic::AtomicBool>,
     /// winit 事件循环唤醒器（窗口路径用；headless 为 None）。
-    waker: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+    waker: WakerFn,
 }
 
 impl EventProxy {

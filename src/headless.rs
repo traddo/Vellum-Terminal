@@ -42,7 +42,7 @@ impl Headless {
         // 读回缓冲每行须对齐到 256 字节（wgpu 要求）。
         let unpadded = width * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = ((unpadded + align - 1) / align) * align;
+        let padded_bytes_per_row = unpadded.div_ceil(align) * align;
 
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("headless-readback"),
