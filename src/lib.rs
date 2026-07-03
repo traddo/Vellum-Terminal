@@ -11,6 +11,7 @@ pub mod color_resolve;
 pub mod font;
 pub mod gpu;
 pub mod headless;
+pub mod keymap;
 pub mod render;
 pub mod snapshot;
 pub mod terminal;

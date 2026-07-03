@@ -63,7 +63,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// headless 路径：目标格式固定为 `TARGET_FORMAT`（Rgba8Unorm）。
     pub fn new(device: &wgpu::Device, font: &FontEngine) -> Self {
+        Self::new_with_format(device, font, TARGET_FORMAT)
+    }
+
+    /// 窗口路径：目标格式由 surface 决定（须为非 sRGB 8-bit unorm）。
+    pub fn new_with_format(
+        device: &wgpu::Device,
+        font: &FontEngine,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vlt-shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -181,7 +191,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: "fs_bg",
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: TARGET_FORMAT,
+                    format: target_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -216,7 +226,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: "fs_glyph",
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: TARGET_FORMAT,
+                    format: target_format,
                     // 字形已在 shader 内与背景混合完成，输出不透明，无需硬件混合。
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
