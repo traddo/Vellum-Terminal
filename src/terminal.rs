@@ -125,11 +125,18 @@ impl Terminal {
             cell_height: cell_px.1,
         };
 
+        // P2-0：终端能力环境变量。让 shell/程序识别 256 色 + 真彩色能力，
+        // 否则 bash 提示符不上色、ls 目录不上蓝。
+        // TODO(Phase 3): 评估自带 terminfo；本期借用 xterm-256color。
+        let mut env = std::collections::HashMap::new();
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("COLORTERM".to_string(), "truecolor".to_string());
+
         let pty_options = PtyOptions {
             shell: None, // 默认 shell（$SHELL）
             working_directory: None,
             drain_on_exit: true,
-            env: Default::default(),
+            env,
         };
 
         let pty = tty::new(&pty_options, window_size, 0)?;
