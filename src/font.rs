@@ -29,6 +29,41 @@ use crate::config::FontSpec;
 pub const JETBRAINS_MONO_REGULAR: &[u8] =
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 
+/// 光栅化调优参数（锐度包 T2）。全部为「跨机确定」的纯 CPU 后处理，
+/// 同一取值在任何机器上产出逐字节一致的 alpha/RGBA mask（不破逐像素一致性铁律）。
+#[derive(Clone, Copy, Debug)]
+pub struct RasterTuning {
+    /// 笔画对比度增强（stem darkening）。0.0 = 关闭（忠实覆盖率）。
+    /// 无 hinting 的细笔画在白底显「洗白」，此项对 alpha 覆盖率做幂律加深：
+    /// `cov' = cov^(1/(1+contrast))`，contrast>0 时抬升中间覆盖率、笔画更扎实。
+    /// 纯查表/幂运算，确定性；不引入任何系统依赖。
+    pub contrast: f32,
+    /// 亚像素抗锯齿模式（决定 atlas 通道与光栅路径）。
+    pub aa: AaMode,
+}
+
+impl Default for RasterTuning {
+    fn default() -> Self {
+        // 96 DPI 白底默认：轻度 stem darkening 让细笔画「扎实不糊」，
+        // 但不过冲（>0.5 会让 'o'/'e' 等闭合字腔糊死）。灰度 AA 为默认。
+        RasterTuning {
+            contrast: 0.30,
+            aa: AaMode::Grayscale,
+        }
+    }
+}
+
+/// 抗锯齿模式（text_aa 配置）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AaMode {
+    /// 灰度覆盖率（默认，跨机最稳，无彩边）。
+    Grayscale,
+    /// 水平亚像素 RGB（标准 LCD 条带排列）。
+    SubpixelRgb,
+    /// 水平亚像素 BGR（部分面板条带反序）。
+    SubpixelBgr,
+}
+
 /// 单元格度量（全部为物理像素，且已取整，保证物理像素 1:1 对齐）。
 #[derive(Clone, Copy, Debug)]
 pub struct CellMetrics {
@@ -97,11 +132,15 @@ struct RoleIndex {
     embedded: Option<usize>,
 }
 
-/// 灰度字形 atlas（单张纹理，shelf packing）。
+/// 字形 atlas（单张 RGBA8 纹理，shelf packing）。
+///
+/// 统一用 RGBA8 承载「每通道覆盖率」：灰度 AA 时 R=G=B=覆盖率；
+/// 亚像素 AA 时 R/G/B 为三个子像素各自覆盖率。A 通道恒为 255（不用）。
+/// 单一格式让灰度/亚像素共用同一纹理与同一 shader 路径（per-channel mix）。
 pub struct Atlas {
     pub width: u32,
     pub height: u32,
-    /// R8 单通道 alpha 数据，行主序。
+    /// RGBA8 数据，行主序，每像素 4 字节。
     pub data: Vec<u8>,
     // shelf packing 游标。
     shelf_x: u32,
@@ -114,15 +153,15 @@ impl Atlas {
         Atlas {
             width,
             height,
-            data: vec![0u8; (width * height) as usize],
+            data: vec![0u8; (width * height * 4) as usize],
             shelf_x: 0,
             shelf_y: 0,
             shelf_height: 0,
         }
     }
 
-    /// 在 atlas 中分配一块 (w × h) 区域并写入 alpha 数据，返回左上角坐标。
-    /// 1px 间距避免采样时相邻字形串色。
+    /// 在 atlas 中分配一块 (w × h) 区域并写入 RGBA 数据（`src` 长度须为 w*h*4），
+    /// 返回左上角坐标。1px 间距避免采样时相邻字形串色。
     fn insert(&mut self, w: u32, h: u32, src: &[u8]) -> Option<(u32, u32)> {
         if w == 0 || h == 0 {
             return Some((0, 0));
@@ -138,10 +177,10 @@ impl Atlas {
         }
         let (x, y) = (self.shelf_x, self.shelf_y);
         for row in 0..h {
-            let dst_off = ((y + row) * self.width + x) as usize;
-            let src_off = (row * w) as usize;
-            self.data[dst_off..dst_off + w as usize]
-                .copy_from_slice(&src[src_off..src_off + w as usize]);
+            let dst_off = (((y + row) * self.width + x) * 4) as usize;
+            let src_off = (row * w * 4) as usize;
+            let n = (w * 4) as usize;
+            self.data[dst_off..dst_off + n].copy_from_slice(&src[src_off..src_off + n]);
         }
         self.shelf_x += w + PAD;
         self.shelf_height = self.shelf_height.max(h);
@@ -157,6 +196,8 @@ pub struct FontEngine {
     pub metrics: CellMetrics,
     pub atlas: Atlas,
     cache: HashMap<char, Option<GlyphEntry>>,
+    /// 光栅化调优（stem darkening / 亚像素 AA，T2）。
+    tuning: RasterTuning,
     /// atlas 是否自上次上传后有新增字形。
     pub dirty: bool,
 }
@@ -164,19 +205,20 @@ pub struct FontEngine {
 impl FontEngine {
     /// 零配置构造：内嵌 JetBrains Mono 主字体 + 默认 fallback（Sarasa Mono SC）。
     pub fn new(ppem: f32) -> Self {
-        Self::from_spec_tuned(ppem, &FontSpec::default(), 0.0, 1.0)
+        Self::from_spec_tuned(ppem, &FontSpec::default(), 0.0, 1.0, RasterTuning::default())
     }
 
-    /// 按角色配置构造（默认字距/行高）。
+    /// 按角色配置构造（默认字距/行高/调优）。
     pub fn from_spec(ppem: f32, spec: &FontSpec) -> Self {
-        Self::from_spec_tuned(ppem, spec, 0.0, 1.0)
+        Self::from_spec_tuned(ppem, spec, 0.0, 1.0, RasterTuning::default())
     }
 
-    /// 按角色配置 + cell 微调构造。
+    /// 按角色配置 + cell 微调 + 光栅调优构造。
     ///
     /// - `letter_spacing_px`：物理像素，加到主字体 cell 宽度（唯一权威）上。
     ///   全网格统一变化；CJK 仍占 2×cell、回退字形随之居中，不破铁律 4。
     /// - `line_height`：行高倍数（1.0 = 字体自身度量）。
+    /// - `tuning`：stem darkening 对比度 + 亚像素 AA 模式（T2）。
     ///
     /// 任何角色未命中都记日志并优雅降级，最终兜底内嵌字体。
     pub fn from_spec_tuned(
@@ -184,6 +226,7 @@ impl FontEngine {
         spec: &FontSpec,
         letter_spacing_px: f32,
         line_height: f32,
+        tuning: RasterTuning,
     ) -> Self {
         let db = build_font_db();
         let mut slots: Vec<FontSlot> = Vec::new();
@@ -293,6 +336,7 @@ impl FontEngine {
             metrics,
             atlas: Atlas::new(2048, 2048),
             cache: HashMap::new(),
+            tuning,
             dirty: true,
         }
     }
@@ -371,6 +415,7 @@ impl FontEngine {
     }
 
     /// 用指定槽位光栅化字形；非主字体按 advance 在其 1/2 格内水平居中。
+    /// 输出统一为 RGBA（每通道覆盖率）；亚像素模式下横向 3× 过采样 + LCD 滤波。
     fn rasterize_from_slot(&mut self, fi: usize, glyph_id: u16, span_w: i32) -> Option<GlyphEntry> {
         let slot = &self.slots[fi];
         let ppem = slot.ppem;
@@ -385,42 +430,129 @@ impl FontEngine {
             (((span_w as f32) - adv) / 2.0).round() as i32
         };
 
-        let mut scaler = self
-            .context
-            .builder(font)
-            .size(ppem)
-            .hint(false) // 无 hinting：一致性 > 低分屏微调（design.md §5.1）。
-            .build();
+        let subpixel = matches!(self.tuning.aa, AaMode::SubpixelRgb | AaMode::SubpixelBgr);
 
-        let image = Render::new(&[
+        // 亚像素：横向 3× 过采样光栅化，再逐 3 子像素合成一个像素的 RGB。
+        // 灰度：正常 1× 光栅化。x 方向的缩放通过 transform 矩阵实现（design.md 亚像素路线）。
+        let x_scale = if subpixel { 3.0 } else { 1.0 };
+
+        // 无 hinting：一致性 > 低分屏微调（design.md §5.1）。
+        let mut scaler = self.context.builder(font).size(ppem).hint(false).build();
+
+        // 亚像素时用 Render transform 在 x 方向放大 3×（placement.left/width 随之 3×）。
+        let mut render = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
-        ])
-        .format(Format::Alpha)
-        .offset(Vector::new(0.0, 0.0))
-        .render(&mut scaler, glyph_id)?;
+        ]);
+        render.format(Format::Alpha).offset(Vector::new(0.0, 0.0));
+        if subpixel {
+            use swash::zeno::Transform;
+            render.transform(Some(Transform::scale(x_scale, 1.0)));
+        }
+        let image = render.render(&mut scaler, glyph_id)?;
 
         // 灰度 mask 之外的内容（彩色 Emoji 等）暂不支持。TODO(Phase 3)。
         if image.content != Content::Mask {
             return None;
         }
 
-        let w = image.placement.width;
+        let sw = image.placement.width; // 过采样后的位图宽（亚像素时 ≈3×）
         let h = image.placement.height;
-        if w == 0 || h == 0 {
+        if sw == 0 || h == 0 {
             return None; // 空白字形（空格等）。
         }
 
-        let (ax, ay) = self.atlas.insert(w, h, &image.data)?;
+        let (rgba, w, left_px) = if subpixel {
+            self.compose_subpixel(&image.data, sw, h, image.placement.left)
+        } else {
+            (self.compose_grayscale(&image.data, sw, h), sw, image.placement.left)
+        };
+
+        let (ax, ay) = self.atlas.insert(w, h, &rgba)?;
         Some(GlyphEntry {
             atlas_x: ax,
             atlas_y: ay,
             width: w,
             height: h,
-            left: image.placement.left + center_dx,
+            left: left_px + center_dx,
             top: image.placement.top,
         })
+    }
+
+    /// 灰度合成：单通道覆盖率 → RGBA（R=G=B=cov'，A=255），并应用 stem darkening。
+    fn compose_grayscale(&self, mask: &[u8], w: u32, h: u32) -> Vec<u8> {
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        for i in 0..(w * h) as usize {
+            let c = apply_contrast(mask[i], self.tuning.contrast);
+            out[i * 4] = c;
+            out[i * 4 + 1] = c;
+            out[i * 4 + 2] = c;
+            out[i * 4 + 3] = 255;
+        }
+        out
+    }
+
+    /// 亚像素合成：横向 3× 过采样 mask → 逐像素 RGB 三元组。
+    ///
+    /// 路线（design.md T2）：源位图每 3 个横向子样本对应一个目标像素的 R/G/B，
+    /// 再用相邻通道 [1/9,2/9,3/9,2/9,1/9] 归一化 5 抽头 LCD filter 压制彩边（FIR 低通）。
+    /// BGR 面板在最后交换 R/B。stem darkening 在子像素域先施加。
+    /// 返回 (rgba, 目标宽度像素, 目标 left 像素)。
+    fn compose_subpixel(
+        &self,
+        mask: &[u8],
+        sw: u32,
+        h: u32,
+        src_left: i32,
+    ) -> (Vec<u8>, u32, i32) {
+        // 目标宽度：过采样宽度 /3 向上取整；左右各留 1 像素余量吸收 filter 拖尾。
+        let dst_w = sw.div_ceil(3) + 2;
+        let dst_left = src_left.div_euclid(3) - 1;
+        // 子像素起点在目标位图内的偏移（源 left 相对 dst_left*3 的位置）。
+        let sub_origin = src_left - dst_left * 3;
+
+        // LCD 5 抽头滤波器（归一化，和为 1）。
+        const TAP: [i32; 5] = [1, 2, 3, 2, 1];
+        const TAP_SUM: i32 = 9;
+
+        let bgr = self.tuning.aa == AaMode::SubpixelBgr;
+        let mut out = vec![0u8; (dst_w * h * 4) as usize];
+
+        for y in 0..h as i32 {
+            for x in 0..dst_w as i32 {
+                // 该目标像素三个子像素在过采样源中的中心索引。
+                let base = x * 3 + sub_origin;
+                let mut chan = [0u8; 3];
+                for (ci, c) in chan.iter_mut().enumerate() {
+                    // 子像素中心 = base + ci；对其 ±2 邻域做 5 抽头卷积。
+                    let center = base + ci as i32;
+                    let mut acc = 0i32;
+                    for (t, &wgt) in TAP.iter().enumerate() {
+                        let sx = center + t as i32 - 2;
+                        let v = if sx >= 0 && sx < sw as i32 {
+                            mask[(y as u32 * sw + sx as u32) as usize] as i32
+                        } else {
+                            0
+                        };
+                        acc += v * wgt;
+                    }
+                    let cov = (acc / TAP_SUM).clamp(0, 255) as u8;
+                    *c = apply_contrast(cov, self.tuning.contrast);
+                }
+                let (r, g, b) = if bgr {
+                    (chan[2], chan[1], chan[0])
+                } else {
+                    (chan[0], chan[1], chan[2])
+                };
+                let off = ((y as u32 * dst_w + x as u32) * 4) as usize;
+                out[off] = r;
+                out[off + 1] = g;
+                out[off + 2] = b;
+                out[off + 3] = 255;
+            }
+        }
+        (out, dst_w, dst_left)
     }
 
     /// 合成 tofu（空心矩形）：链上所有字体都缺字时的占位。
@@ -431,12 +563,17 @@ impl FontEngine {
         let h = ((m.ascent as f32) * 0.76).round().max(3.0) as u32;
         let stroke = ((m.height as f32) / 14.0).round().max(1.0) as u32;
 
-        let mut bitmap = vec![0u8; (w * h) as usize];
+        let mut bitmap = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
             for x in 0..w {
                 let edge = x < stroke || y < stroke || x >= w - stroke || y >= h - stroke;
                 if edge {
-                    bitmap[(y * w + x) as usize] = 0xB0; // 略淡于正文，不喧宾夺主
+                    let off = ((y * w + x) * 4) as usize;
+                    // 略淡于正文，不喧宾夺主；RGBA（灰度写三通道）。
+                    bitmap[off] = 0xB0;
+                    bitmap[off + 1] = 0xB0;
+                    bitmap[off + 2] = 0xB0;
+                    bitmap[off + 3] = 255;
                 }
             }
         }
@@ -451,6 +588,19 @@ impl FontEngine {
             top: h as i32, // 底边落在基线上
         })
     }
+}
+
+/// Stem darkening：对 alpha 覆盖率做幂律加深。
+/// `cov' = 255 * (cov/255)^(1/(1+contrast))`，contrast=0 时恒等（不改一个字节）。
+/// 纯标量运算，跨机确定；抬升 0<cov<255 的中间覆盖率，让无 hinting 的细笔画更扎实。
+#[inline]
+fn apply_contrast(cov: u8, contrast: f32) -> u8 {
+    if contrast <= 0.0 || cov == 0 || cov == 255 {
+        return cov;
+    }
+    let x = cov as f32 / 255.0;
+    let y = x.powf(1.0 / (1.0 + contrast));
+    (y * 255.0 + 0.5).clamp(0.0, 255.0) as u8
 }
 
 /// CJK 码点判定（决定路由到 cjk 角色）。

@@ -10,6 +10,7 @@
 
 use serde::Deserialize;
 
+use crate::font::{AaMode, RasterTuning};
 use crate::theme::{Palette, Rgb};
 
 /// 一个字体角色：家族名或文件路径 + 可选缩放系数。
@@ -61,6 +62,8 @@ pub struct Config {
     pub padding: (u32, u32),
     /// 滚动缓冲行数。
     pub scrolling_history: usize,
+    /// 光栅化调优（stem darkening / 亚像素 AA，T2 锐度包）。
+    pub tuning: RasterTuning,
     /// 主题调色板（可被 [colors] 覆盖）。
     pub palette: Palette,
 }
@@ -74,6 +77,7 @@ impl Default for Config {
             line_height: 1.0,
             padding: (10, 10),
             scrolling_history: 10_000,
+            tuning: RasterTuning::default(),
             palette: Palette::default(),
         }
     }
@@ -106,6 +110,10 @@ struct RawFont {
     latin_scale: Option<f32>,
     cjk_scale: Option<f32>,
     symbols_scale: Option<f32>,
+    /// 笔画对比度增强（stem darkening），0.0 = 关闭。默认 0.30（96 DPI 扎实不糊）。
+    text_contrast: Option<f32>,
+    /// 抗锯齿模式："grayscale"（默认）/ "subpixel-rgb" / "subpixel-bgr"。
+    text_aa: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -210,6 +218,20 @@ fn resolve(raw: RawConfig) -> Config {
         if let Some(lh) = f.line_height {
             cfg.line_height = lh.clamp(0.8, 2.0);
         }
+        if let Some(tc) = f.text_contrast {
+            cfg.tuning.contrast = tc.clamp(0.0, 1.0);
+        }
+        if let Some(aa) = f.text_aa {
+            cfg.tuning.aa = match aa.trim().to_ascii_lowercase().as_str() {
+                "grayscale" | "gray" | "grey" => AaMode::Grayscale,
+                "subpixel-rgb" | "subpixel" | "rgb" => AaMode::SubpixelRgb,
+                "subpixel-bgr" | "bgr" => AaMode::SubpixelBgr,
+                other => {
+                    eprintln!("vlt: text_aa 未知取值 {:?}（用 grayscale）", other);
+                    AaMode::Grayscale
+                }
+            };
+        }
     }
 
     if let Some(w) = raw.window {
@@ -292,7 +314,16 @@ line_height = 1.0
 
 # 各角色字形缩放（只缩字形视觉大小，不改网格）：
 # cjk_scale：雅黑在 Pragmata 窄格下的视觉补偿，1.0 = 纯自动适配。
-cjk_scale = 1.1
+cjk_scale = 0.92
+
+# 锐度（T2，96 DPI 白底防「字虚」）：
+# text_contrast：笔画对比度增强（stem darkening），0.0=关闭，范围 0..1。
+#   无 hinting 的细笔画在白底显「洗白」，此项抬升中间覆盖率让笔画更扎实。
+#   注意：跨机确定（纯 CPU 幂律后处理），不破逐像素一致性。默认 0.30。
+# text_aa：抗锯齿模式，"grayscale"（默认，最稳无彩边）/ "subpixel-rgb" / "subpixel-bgr"。
+#   亚像素依赖显示器子像素条带排列（多数 LCD 为 RGB），换屏可能需改；灰度不挑屏。
+text_contrast = 0.30
+text_aa = "grayscale"
 
 [window]
 padding_x = 10                  # 窗口内边距（逻辑像素）

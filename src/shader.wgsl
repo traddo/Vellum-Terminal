@@ -120,19 +120,21 @@ fn vs_glyph(@builtin(vertex_index) vi: u32, inst: GlyphInstance) -> GlyphVsOut {
 
 @fragment
 fn fs_glyph(in: GlyphVsOut) -> @location(0) vec4<f32> {
-    // atlas 是 R8 alpha 覆盖率。
-    let coverage = textureSample(atlas_tex, atlas_samp, in.uv).r;
+    // atlas 是 RGBA8「每通道覆盖率」：
+    // 灰度 AA 时 R=G=B（三通道同值 → 等价于旧的单覆盖率路径）；
+    // 亚像素 AA 时 R/G/B 为三个子像素各自覆盖率（逐通道独立混合，防彩边靠 CPU 端 LCD filter）。
+    let cov = textureSample(atlas_tex, atlas_samp, in.uv).rgb;
 
     if (globals.gamma_correct > 0.5) {
-        // 正确路径：在线性光空间按覆盖率混合，再转回 sRGB。
+        // 正确路径：在线性光空间按「逐通道覆盖率」混合，再转回 sRGB。
         let fg_lin = srgb_to_linear(in.fg);
         let bg_lin = srgb_to_linear(in.bg);
-        let mixed_lin = mix(bg_lin, fg_lin, coverage);
+        let mixed_lin = mix(bg_lin, fg_lin, cov); // cov 为 vec3，逐通道 mix
         let out_srgb = linear_to_srgb(mixed_lin);
         return vec4<f32>(out_srgb, 1.0);
     } else {
         // 对照路径：直接在 sRGB 非线性空间混合（naive，笔画偏重发糊）。
-        let mixed = mix(in.bg, in.fg, coverage);
+        let mixed = mix(in.bg, in.fg, cov);
         return vec4<f32>(mixed, 1.0);
     }
 }

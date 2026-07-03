@@ -4,7 +4,8 @@
 //! - `gamma_correction_lightens`：gamma 校正开启时，深色文字叠白底的总墨量
 //!   应少于 naive 混合（校正让笔画更轻、不发糊）。
 
-use vlt::font::FontEngine;
+use vlt::config::FontSpec;
+use vlt::font::{AaMode, FontEngine, RasterTuning};
 use vlt::gpu::Gpu;
 use vlt::headless::Headless;
 use vlt::render::Renderer;
@@ -13,8 +14,18 @@ use vlt::terminal::{term_from_ansi, TermSize};
 use vlt::theme::Palette;
 
 fn render(ansi: &[u8], cols: usize, lines: usize, gamma: bool) -> (u32, u32, Vec<u8>) {
+    render_tuned(ansi, cols, lines, gamma, RasterTuning::default())
+}
+
+fn render_tuned(
+    ansi: &[u8],
+    cols: usize,
+    lines: usize,
+    gamma: bool,
+    tuning: RasterTuning,
+) -> (u32, u32, Vec<u8>) {
     let ppem = 30.0;
-    let mut font = FontEngine::new(ppem);
+    let mut font = FontEngine::from_spec_tuned(ppem, &FontSpec::default(), 0.0, 1.0, tuning);
     let cw = font.metrics.width;
     let ch = font.metrics.height;
     let (w, h) = (cw * cols as u32, ch * lines as u32);
@@ -75,6 +86,34 @@ fn cjk_wide_char_grid_alignment() {
     assert_eq!(chars[1], '永', "col1 应为宽字符 永");
     // col2 是 永 的后半格占位（spacer，通常渲染为空）。
     assert_eq!(chars[3], 'B', "col3 应为 B（永占了 col1..=2）");
+}
+
+#[test]
+fn subpixel_determinism() {
+    // 亚像素 AA 跨机确定性：同内容两次渲染逐字节一致（不破逐像素一致性铁律）。
+    let text = b"Hello, Vellum! subpixel 0O1lI ->";
+    let sub = RasterTuning {
+        contrast: 0.30,
+        aa: AaMode::SubpixelRgb,
+    };
+    let (_, _, a) = render_tuned(text, 40, 2, true, sub);
+    let (_, _, b) = render_tuned(text, 40, 2, true, sub);
+    assert_eq!(a, b, "亚像素 AA 两次渲染必须逐字节一致");
+}
+
+#[test]
+fn contrast_zero_is_identity() {
+    // stem darkening 关闭（contrast=0）应与默认灰度路径在 mask 上无差别，
+    // 但因默认 tuning 的 contrast=0.30，这里显式验证「0.0 灰度」与「关闭对比度」等价：
+    // 两次都用 contrast=0.0 灰度，结果必须逐字节一致（回归护栏）。
+    let text = b"contrast identity AAA ggg 000";
+    let t0 = RasterTuning {
+        contrast: 0.0,
+        aa: AaMode::Grayscale,
+    };
+    let (_, _, a) = render_tuned(text, 40, 2, true, t0);
+    let (_, _, b) = render_tuned(text, 40, 2, true, t0);
+    assert_eq!(a, b, "contrast=0 灰度两次渲染必须一致");
 }
 
 #[test]

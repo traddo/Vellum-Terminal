@@ -98,7 +98,8 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            // RGBA8：每通道覆盖率（灰度 R=G=B，亚像素 R/G/B 各异），非 sRGB。
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -184,7 +185,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_bg",
-                buffers: &[bg_layout.clone()],
+                buffers: std::slice::from_ref(&bg_layout),
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -269,7 +270,7 @@ impl Renderer {
             &font.atlas.data,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(self.atlas_dim.0), // R8：每像素 1 字节
+                bytes_per_row: Some(self.atlas_dim.0 * 4), // RGBA8：每像素 4 字节
                 rows_per_image: Some(self.atlas_dim.1),
             },
             wgpu::Extent3d {
@@ -530,7 +531,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });

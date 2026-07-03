@@ -298,6 +298,7 @@ impl ApplicationHandler<Wakeup> for App {
             &self.cfg.font,
             self.cfg.letter_spacing * scale, // 逻辑像素 → 物理像素
             self.cfg.line_height,
+            self.cfg.tuning,
         );
         log::info!("已加载字体角色链：{:?}", font.loaded_families());
 
@@ -673,6 +674,7 @@ impl App {
             &self.cfg.font,
             self.cfg.letter_spacing * self.scale_factor,
             self.cfg.line_height,
+            self.cfg.tuning,
         );
         renderer.rebuild_atlas_texture(&gpu.device, &font);
         self.font = Some(font);
