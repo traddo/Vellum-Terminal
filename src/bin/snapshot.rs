@@ -131,5 +131,15 @@ fn main() {
     // 光标默认在输出末尾；这里让它落在字符上。
     render_case(&gpu, ppem, 40, 2, cur.as_bytes(), true, &out_dir.join("cursor.png"));
 
+    // ---- 用例 7：CJK 双宽 + 中英混排（P2-1）----
+    // 入库回归用中性中文样文 + 内嵌 JetBrains Mono + Sarasa 兜底（不依赖商业字体）。
+    // 每个汉字占 2 格，与拉丁网格对齐；混排代码行验证基线协调。
+    let mut cjk = String::new();
+    cjk.push_str("永东国酬爱郁灵鹰袋 CJK 双宽对齐\r\n");
+    cjk.push_str("中英混排：let x = 张三.名字();  // 注释\r\n");
+    cjk.push_str("标点：，。！？；：「」（）【】…—\r\n");
+    cjk.push_str("边框对齐：|永|A|东|B|国|C|酬|D|\r\n");
+    render_case(&gpu, ppem, 44, 5, cjk.as_bytes(), true, &out_dir.join("cjk.png"));
+
     println!("全部截图完成，见 tests/snapshots/");
 }

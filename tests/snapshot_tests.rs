@@ -43,6 +43,41 @@ fn determinism() {
 }
 
 #[test]
+fn cjk_determinism() {
+    // CJK 双宽回归：中英混排两次渲染逐字节一致（P2-1，走内嵌 JBM + Sarasa 兜底）。
+    let text = "永东国酬爱郁灵鹰袋 mixed 中英 code();".as_bytes();
+    let (_, _, a) = render(text, 44, 2, true);
+    let (_, _, b) = render(text, 44, 2, true);
+    assert_eq!(a, b, "CJK 混排两次渲染必须逐字节一致");
+}
+
+#[test]
+fn cjk_wide_char_grid_alignment() {
+    // 铁律 4 验证：汉字占 2 格，网格宽度只由 unicode-width 决定。
+    // 用「A永B」布局，永应占 col 1..=2，B 落在 col 3。
+    use vlt::terminal::{term_from_ansi, TermSize};
+
+    let size = TermSize {
+        columns: 10,
+        screen_lines: 1,
+    };
+    let term = term_from_ansi(size, "A永B".as_bytes());
+    // 逐格取字符，确认宽字符占位与后半格 spacer。
+    let mut chars = Vec::new();
+    for col in 0..6 {
+        let p = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(col),
+        );
+        chars.push(term.grid()[p].c);
+    }
+    assert_eq!(chars[0], 'A', "col0 应为 A");
+    assert_eq!(chars[1], '永', "col1 应为宽字符 永");
+    // col2 是 永 的后半格占位（spacer，通常渲染为空）。
+    assert_eq!(chars[3], 'B', "col3 应为 B（永占了 col1..=2）");
+}
+
+#[test]
 fn gamma_correction_lightens() {
     // 纯黑文字叠纯白底，统计总“墨量”（255 - 亮度 的和）。
     let text = b"AAAA BBBB gggg mmmm wwww 0000 The quick brown fox";
