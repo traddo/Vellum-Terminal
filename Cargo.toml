@@ -1,0 +1,44 @@
+[package]
+name = "vlt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Vellum Terminal — 纯 Rust 原生终端，PDF 式自主字体光栅化"
+license = "Apache-2.0"
+
+[[bin]]
+name = "vlt"
+path = "src/main.rs"
+
+[[bin]]
+name = "snapshot"
+path = "src/bin/snapshot.rs"
+
+# 第 1 层：VT 状态机 + PTY + Grid + 选区（整层复用，铁律 2）
+[dependencies]
+alacritty_terminal = "=0.26.0"
+
+# 窗口 / 事件 / IME（技术栈已定）
+winit = "0.30"
+
+# GPU 渲染（Vulkan 优先）
+wgpu = "22.1"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+
+# 字形光栅化（纯 Rust，铁律 1）
+swash = "0.1.19"
+
+# 字符宽度：必须与 alacritty_terminal 0.26 内部同源（其用 0.2.0）
+unicode-width = "=0.2.0"
+
+# PNG 导出（headless 截图测试）
+png = "0.17"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
