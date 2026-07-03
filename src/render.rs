@@ -287,6 +287,7 @@ impl Renderer {
     /// - `snap`：网格快照。
     /// - `font`：字体引擎（会即时光栅化尚未缓存的字形）。
     /// - `screen_size`：目标物理像素尺寸。
+    /// - `origin_px`：网格原点（窗口内边距 P2-7，物理像素）；padding 区域保持清屏色（纸白）。
     /// - `gamma_correct`：true=正确混合，false=naive（用于对比截图）。
     #[allow(clippy::too_many_arguments)]
     pub fn render(
@@ -297,11 +298,13 @@ impl Renderer {
         snap: &GridSnapshot,
         font: &mut FontEngine,
         screen_size: (u32, u32),
+        origin_px: (u32, u32),
         gamma_correct: bool,
     ) {
         let m = font.metrics;
         let cw = m.width as f32;
         let ch = m.height as f32;
+        let (ox, oy) = (origin_px.0 as f32, origin_px.1 as f32);
 
         // ---- 构建实例数据 ----
         let mut bg_instances: Vec<BgInstance> = Vec::with_capacity(snap.cells.len() + 8);
@@ -319,8 +322,8 @@ impl Renderer {
         };
 
         for cell in &snap.cells {
-            let x = cell.col as f32 * cw;
-            let y = cell.line as f32 * ch;
+            let x = ox + cell.col as f32 * cw;
+            let y = oy + cell.line as f32 * ch;
 
             let mut fg = cell.fg;
             let bg = cell.bg;
@@ -402,8 +405,8 @@ impl Renderer {
 
         // 非 block 光标（beam/underline/hollow）作为装饰线画。
         if cursor.visible {
-            let x = cursor.col as f32 * cw;
-            let y = cursor.line as f32 * ch;
+            let x = ox + cursor.col as f32 * cw;
+            let y = oy + cursor.line as f32 * ch;
             let cur_col = Rgb::new(0x1A, 0x1A, 0x1A).to_srgb_f32();
             match cursor.shape {
                 SnapCursorShape::Beam => deco_instances.push(BgInstance {
@@ -426,6 +429,17 @@ impl Renderer {
                 }
                 _ => {}
             }
+        }
+
+        // P2-3 回滚指示：查看历史时在右上角画一枚克制的浅灰小竖条（纸面风格）。
+        if snap.display_offset > 0 {
+            let bar_w = (cw * 0.45).max(3.0);
+            let bar_h = ch * 1.4;
+            deco_instances.push(BgInstance {
+                pos: [screen_size.0 as f32 - bar_w - 8.0, 8.0],
+                size: [bar_w, bar_h],
+                color: Rgb::new(0xAD, 0xAD, 0xAD).to_srgb_f32(),
+            });
         }
 
         // ---- 同步 atlas（字形光栅化在上面 font.glyph 里已发生）----

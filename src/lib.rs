@@ -6,8 +6,10 @@
 //! - `font`：第 3 层，swash 光栅化 + glyph atlas。
 //! - `render` / `gpu` / `headless`：第 4 层，wgpu 渲染与离屏截图。
 //! - `theme` / `color_resolve`：Vellum Paper 调色板与颜色解析。
+//! - `config`：TOML 配置（角色制字体 / 窗口 padding / 主题覆盖）。
 
 pub mod color_resolve;
+pub mod config;
 pub mod font;
 pub mod gpu;
 pub mod headless;

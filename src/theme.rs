@@ -30,6 +30,7 @@ impl Rgb {
 }
 
 /// Vellum Paper 调色板。
+#[derive(Clone, Debug)]
 pub struct Palette {
     /// 纸面背景（纯白）。
     pub background: Rgb,
@@ -37,6 +38,8 @@ pub struct Palette {
     pub foreground: Rgb,
     /// 光标颜色（墨色 block）。
     pub cursor: Rgb,
+    /// 选区高亮底色（淡蓝纸感，文字保持墨色不反白，P2-2）。
+    pub selection: Rgb,
     /// ANSI normal 8 色（index 0..=7）。
     pub normal: [Rgb; 8],
     /// ANSI bright 8 色（index 8..=15）。
@@ -50,6 +53,7 @@ impl Default for Palette {
             background: Rgb::new(0xFF, 0xFF, 0xFF),
             foreground: Rgb::new(0x1A, 0x1A, 0x1A),
             cursor: Rgb::new(0x1A, 0x1A, 0x1A),
+            selection: Rgb::new(0xB4, 0xD5, 0xFE), // 淡蓝纸感，非饱和蓝
             normal: [
                 Rgb::new(0x2B, 0x2B, 0x2B), // black  -> 深灰墨（对比度极高）
                 Rgb::new(0xC0, 0x39, 0x2B), // red

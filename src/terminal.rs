@@ -107,11 +107,15 @@ pub struct Terminal {
 
 impl Terminal {
     /// spawn 一个真实 shell 的 PTY 并起 IO 线程。
-    pub fn spawn(size: TermSize, cell_px: (u16, u16)) -> std::io::Result<Self> {
+    pub fn spawn(
+        size: TermSize,
+        cell_px: (u16, u16),
+        scrolling_history: usize,
+    ) -> std::io::Result<Self> {
         let proxy = EventProxy::new();
 
         let config = Config {
-            scrolling_history: 10_000,
+            scrolling_history,
             ..Config::default()
         };
 

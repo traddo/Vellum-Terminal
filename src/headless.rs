@@ -70,7 +70,7 @@ impl Headless {
         font: &mut FontEngine,
         gamma_correct: bool,
     ) -> Vec<u8> {
-        // 渲染到离屏 view。
+        // 渲染到离屏 view（headless 不加 padding，保证回归基线稳定）。
         renderer.render(
             &gpu.device,
             &gpu.queue,
@@ -78,6 +78,7 @@ impl Headless {
             snap,
             font,
             (self.width, self.height),
+            (0, 0),
             gamma_correct,
         );
 

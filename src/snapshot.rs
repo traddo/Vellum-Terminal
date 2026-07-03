@@ -56,6 +56,8 @@ pub struct GridSnapshot {
     pub cursor: SnapCursor,
     /// 默认背景（纸白），用于清屏与空单元格。
     pub default_bg: Rgb,
+    /// 回滚偏移（>0 表示正在查看历史，渲染层据此画回滚指示，P2-3）。
+    pub display_offset: usize,
 }
 
 impl GridSnapshot {
@@ -66,6 +68,7 @@ impl GridSnapshot {
 
         let content = term.renderable_content();
         let display_offset = content.display_offset as i32;
+        let selection = content.selection;
 
         let cursor_point = content.cursor.point;
         let cursor_shape = content.cursor.shape;
@@ -94,7 +97,7 @@ impl GridSnapshot {
             let mut fg = resolve_fg(cell.fg, palette);
             let mut bg = resolve_bg(cell.bg, palette);
 
-            // INVERSE：前后景对调（选区/反显）。
+            // INVERSE：前后景对调（反显）。
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
@@ -102,6 +105,20 @@ impl GridSnapshot {
             // HIDDEN：前景设为背景色（不可见）。
             if flags.contains(Flags::HIDDEN) {
                 fg = bg;
+            }
+
+            // P2-2 选区高亮：淡蓝纸感底色，文字保持墨色不反白。
+            // （宽字符尾随占位格也纳入判定，避免选中 CJK 时后半格漏色。）
+            if let Some(range) = &selection {
+                let in_selection = range.contains(point)
+                    || (flags.contains(Flags::WIDE_CHAR)
+                        && range.contains(alacritty_terminal::index::Point::new(
+                            point.line,
+                            point.column + 1,
+                        )));
+                if in_selection {
+                    bg = palette.selection;
+                }
             }
 
             let ch = cell.c;
@@ -145,6 +162,7 @@ impl GridSnapshot {
             cells,
             cursor,
             default_bg: palette.background,
+            display_offset: display_offset.max(0) as usize,
         }
     }
 }

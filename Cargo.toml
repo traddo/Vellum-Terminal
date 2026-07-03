@@ -32,6 +32,16 @@ swash = "0.1.19"
 # 字符宽度：必须与 alacritty_terminal 0.26 内部同源（其用 0.2.0）
 unicode-width = "=0.2.0"
 
+# 字体家族名解析：仅目录扫描，显式禁用 fontconfig XML 解析（铁律 5 + 确定性）
+fontdb = { version = "0.23", default-features = false, features = ["std", "fs", "memmap"] }
+
+# 剪贴板（P2-2 选区/复制粘贴）
+arboard = { version = "3", default-features = false }
+
+# 配置（P2-4）
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
 # PNG 导出（headless 截图测试）
 png = "0.17"
 
