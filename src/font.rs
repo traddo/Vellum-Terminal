@@ -123,6 +123,8 @@ struct FontSlot {
     ppem: f32,
     /// 家族名/来源描述（诊断用）。
     family: String,
+    /// 解析命中的实际文件绝对路径（诊断用；内嵌字体为 "<embedded>"）。
+    resolved: String,
 }
 
 /// 槽位角色索引表：把「角色」映射到 slots 下标。
@@ -241,17 +243,23 @@ impl FontEngine {
         // ---- 主字体（latin 角色）：cell 尺寸权威 ----
         let mut main_is_embedded = true;
         if let Some(role) = &spec.latin {
-            if let Some((data, index)) = load_source(&db, &role.source) {
+            if let Some((data, index, resolved)) = load_source(&db, &role.source) {
                 slots.push(FontSlot {
                     data: FontData::Owned(data),
                     index,
                     ppem: ppem * role.scale,
                     family: role.source.clone(),
+                    resolved,
                 });
                 main_is_embedded = false;
-                log::info!("latin 主字体：{}", role.source);
             } else {
-                log::warn!("latin 字体未找到：{}（退回内嵌 JetBrains Mono）", role.source);
+                // 绝不静默回退：主字体解析失败是最影响观感的问题，无条件醒目告警。
+                eprintln!(
+                    "vlt: ⚠ WARN latin 主字体「{}」解析失败 → 已回退到【内嵌 JetBrains Mono】\
+                     （JBM 比多数等宽字体宽约 15%，会显得字距偏大）。\
+                     请检查家族名拼写或改用字体文件绝对路径。",
+                    role.source
+                );
             }
         }
         if slots.is_empty() {
@@ -260,6 +268,7 @@ impl FontEngine {
                 index: 0,
                 ppem,
                 family: "JetBrains Mono (embedded)".to_string(),
+                resolved: "<embedded>".to_string(),
             });
         }
 
@@ -273,54 +282,56 @@ impl FontEngine {
 
         // ---- cjk 角色 ----
         if let Some(role) = &spec.cjk {
-            if let Some((data, index)) = load_source(&db, &role.source) {
+            if let Some((data, index, resolved)) = load_source(&db, &role.source) {
                 let fit = fit_fallback_ppem(data.as_slice(), index, ppem, &metrics);
                 let final_ppem = fit * role.scale;
-                log::info!(
-                    "cjk 字体：{}（自动适配 ppem {:.1} × scale {:.2} = {:.1}）",
-                    role.source, fit, role.scale, final_ppem
-                );
                 slots.push(FontSlot {
                     data: FontData::Owned(data),
                     index,
                     ppem: final_ppem,
                     family: role.source.clone(),
+                    resolved,
                 });
                 roles.cjk = Some(slots.len() - 1);
             } else {
-                log::warn!("cjk 字体未找到：{}（CJK 走 fallback 链）", role.source);
+                eprintln!(
+                    "vlt: ⚠ WARN cjk 字体「{}」解析失败 → CJK 将走 fallback 链兜底。",
+                    role.source
+                );
             }
         }
 
         // ---- symbols 角色（Phase 3 预留） ----
         if let Some(role) = &spec.symbols {
-            if let Some((data, index)) = load_source(&db, &role.source) {
+            if let Some((data, index, resolved)) = load_source(&db, &role.source) {
                 let fit = fit_fallback_ppem(data.as_slice(), index, ppem, &metrics);
                 slots.push(FontSlot {
                     data: FontData::Owned(data),
                     index,
                     ppem: fit * role.scale,
                     family: role.source.clone(),
+                    resolved,
                 });
                 roles.symbols = Some(slots.len() - 1);
             } else {
-                log::warn!("symbols 字体未找到：{}", role.source);
+                eprintln!("vlt: ⚠ WARN symbols 字体「{}」解析失败（跳过）。", role.source);
             }
         }
 
         // ---- fallback 链 ----
         for family in &spec.fallback {
-            if let Some((data, index)) = load_source(&db, family) {
+            if let Some((data, index, resolved)) = load_source(&db, family) {
                 let fit = fit_fallback_ppem(data.as_slice(), index, ppem, &metrics);
                 slots.push(FontSlot {
                     data: FontData::Owned(data),
                     index,
                     ppem: fit,
                     family: family.clone(),
+                    resolved,
                 });
                 roles.fallback.push(slots.len() - 1);
             } else {
-                log::warn!("fallback 字体未找到（跳过）：{}", family);
+                eprintln!("vlt: ⚠ WARN fallback 字体「{}」解析失败（跳过）。", family);
             }
         }
 
@@ -331,8 +342,39 @@ impl FontEngine {
                 index: 0,
                 ppem,
                 family: "JetBrains Mono (embedded)".to_string(),
+                resolved: "<embedded>".to_string(),
             });
             roles.embedded = Some(slots.len() - 1);
+        }
+
+        // ---- 无条件角色解析摘要（bug 单要求：绝不静默；不依赖 RUST_LOG）----
+        // 角色 → 家族名 → 实际命中文件路径，一行一个，直接写 stderr。
+        eprintln!("vlt: 字体角色解析结果（角色 → 请求家族 → 实际文件 → ppem）:");
+        let role_of = |i: usize| -> &str {
+            if i == 0 {
+                "latin*"
+            } else if roles.cjk == Some(i) {
+                "cjk"
+            } else if roles.symbols == Some(i) {
+                "symbols"
+            } else if roles.embedded == Some(i) {
+                "embedded兜底"
+            } else {
+                "fallback"
+            }
+        };
+        for (i, s) in slots.iter().enumerate() {
+            eprintln!(
+                "vlt:   [{}] {:<12} {:<22} → {} (ppem {:.1})",
+                i,
+                role_of(i),
+                s.family,
+                s.resolved,
+                s.ppem
+            );
+        }
+        if main_is_embedded && spec.latin.is_some() {
+            eprintln!("vlt:   ↑ 注意：latin 主字体是【内嵌 JBM】而非你配置的家族——见上方 WARN。");
         }
 
         FontEngine {
@@ -641,9 +683,14 @@ fn build_font_db() -> fontdb::Database {
     db
 }
 
-/// 解析「家族名或文件路径」为 (整文件字节, face 索引)。
+/// 解析「家族名或文件路径」为 (整文件字节, face 索引, 命中的实际文件路径)。
 /// 家族名走 fontdb 精确匹配；路径直接读文件（face 0）。
-fn load_source(db: &fontdb::Database, source: &str) -> Option<(Arc<Vec<u8>>, u32)> {
+///
+/// 家族名匹配策略：fontdb 的 query 做「就近匹配」，因此即便请求 weight=NORMAL(400)
+/// 而目标只有 Medium(500)（如 pragmata.ttf），只要家族名唯一仍会命中该 face——
+/// 这对「一个家族只提供单一字面」的字体（Pragmata 仅 Medium）是必要的宽容。
+/// Family::Name 只做全名精确匹配，不做前缀/模糊（"Pragmata" 不会误命中 "PragmataPro"）。
+fn load_source(db: &fontdb::Database, source: &str) -> Option<(Arc<Vec<u8>>, u32, String)> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return None;
@@ -652,7 +699,7 @@ fn load_source(db: &fontdb::Database, source: &str) -> Option<(Arc<Vec<u8>>, u32
     let path = std::path::Path::new(trimmed);
     if trimmed.contains('/') || path.is_absolute() {
         let bytes = std::fs::read(path).ok()?;
-        return Some((Arc::new(bytes), 0));
+        return Some((Arc::new(bytes), 0, path.display().to_string()));
     }
 
     // 家族名：fontdb 精确匹配（Family::Name 是全名匹配，不做前缀/模糊）。
@@ -667,10 +714,10 @@ fn load_source(db: &fontdb::Database, source: &str) -> Option<(Arc<Vec<u8>>, u32
     match source {
         fontdb::Source::File(path) => {
             let bytes = std::fs::read(&path).ok()?;
-            Some((Arc::new(bytes), index))
+            Some((Arc::new(bytes), index, path.display().to_string()))
         }
         fontdb::Source::Binary(data) | fontdb::Source::SharedFile(_, data) => {
-            Some((Arc::new(data.as_ref().as_ref().to_vec()), index))
+            Some((Arc::new(data.as_ref().as_ref().to_vec()), index, "<binary>".to_string()))
         }
     }
 }
