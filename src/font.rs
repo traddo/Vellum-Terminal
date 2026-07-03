@@ -54,13 +54,19 @@ impl Default for RasterTuning {
 }
 
 /// 抗锯齿模式（text_aa 配置）。
+///
+/// 跨机一致性（铁律 1）：三种模式的光栅化全程纯 CPU 确定运算，**不查询系统
+/// 子像素配置**（不读 fontconfig 的 rgba/hintstyle）。因此**同一 text_aa 取值在
+/// 任何机器上产出逐字节一致的 mask**，截图 diff==0 依然成立。亚像素模式的通道次序
+/// 由配置显式钦定（RGB/BGR），而非探测面板——唯一的机器相关性是「用户按自己面板
+/// 条带排列选对 RGB/BGR」这一显式选项，与「系统渲染链偷偷改变像素」有本质区别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AaMode {
-    /// 灰度覆盖率（默认，跨机最稳，无彩边）。
+    /// 灰度覆盖率（默认，跨机最稳，无彩边，不挑面板）。
     Grayscale,
-    /// 水平亚像素 RGB（标准 LCD 条带排列）。
+    /// 水平亚像素 RGB（标准 LCD 条带排列）。横向 3× 过采样 + 5 抽头 LCD filter 压彩边。
     SubpixelRgb,
-    /// 水平亚像素 BGR（部分面板条带反序）。
+    /// 水平亚像素 BGR（部分面板条带反序）。同 RGB 但最终交换 R/B 通道。
     SubpixelBgr,
 }
 
