@@ -293,7 +293,12 @@ impl ApplicationHandler<Wakeup> for App {
         // 字体引擎：物理 ppem = 逻辑字号 × DPR；角色制从 config 装配。
         let scale = window.scale_factor() as f32;
         self.scale_factor = scale;
-        let font = FontEngine::from_spec(self.font_size * scale, &self.cfg.font);
+        let font = FontEngine::from_spec_tuned(
+            self.font_size * scale,
+            &self.cfg.font,
+            self.cfg.letter_spacing * scale, // 逻辑像素 → 物理像素
+            self.cfg.line_height,
+        );
         log::info!("已加载字体角色链：{:?}", font.loaded_families());
 
         // 用选中的 surface 格式重建渲染器（其 pipeline 需匹配该格式）。
@@ -663,7 +668,12 @@ impl App {
         let (Some(gpu), Some(renderer)) = (self.gpu.as_ref(), self.renderer.as_mut()) else {
             return;
         };
-        let font = FontEngine::from_spec(self.font_size * self.scale_factor, &self.cfg.font);
+        let font = FontEngine::from_spec_tuned(
+            self.font_size * self.scale_factor,
+            &self.cfg.font,
+            self.cfg.letter_spacing * self.scale_factor,
+            self.cfg.line_height,
+        );
         renderer.rebuild_atlas_texture(&gpu.device, &font);
         self.font = Some(font);
         if let (Some(config), Some(t)) = (self.surface_config.as_ref(), self.terminal.as_ref()) {

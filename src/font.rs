@@ -164,11 +164,27 @@ pub struct FontEngine {
 impl FontEngine {
     /// 零配置构造：内嵌 JetBrains Mono 主字体 + 默认 fallback（Sarasa Mono SC）。
     pub fn new(ppem: f32) -> Self {
-        Self::from_spec(ppem, &FontSpec::default())
+        Self::from_spec_tuned(ppem, &FontSpec::default(), 0.0, 1.0)
     }
 
-    /// 按角色配置构造。任何角色未命中都记日志并优雅降级，最终兜底内嵌字体。
+    /// 按角色配置构造（默认字距/行高）。
     pub fn from_spec(ppem: f32, spec: &FontSpec) -> Self {
+        Self::from_spec_tuned(ppem, spec, 0.0, 1.0)
+    }
+
+    /// 按角色配置 + cell 微调构造。
+    ///
+    /// - `letter_spacing_px`：物理像素，加到主字体 cell 宽度（唯一权威）上。
+    ///   全网格统一变化；CJK 仍占 2×cell、回退字形随之居中，不破铁律 4。
+    /// - `line_height`：行高倍数（1.0 = 字体自身度量）。
+    ///
+    /// 任何角色未命中都记日志并优雅降级，最终兜底内嵌字体。
+    pub fn from_spec_tuned(
+        ppem: f32,
+        spec: &FontSpec,
+        letter_spacing_px: f32,
+        line_height: f32,
+    ) -> Self {
         let db = build_font_db();
         let mut slots: Vec<FontSlot> = Vec::new();
         let mut roles = RoleIndex::default();
@@ -198,12 +214,12 @@ impl FontEngine {
             });
         }
 
-        // cell 度量来自主字体（铁律 4）。
+        // cell 度量来自主字体（铁律 4）；letter_spacing/line_height 在此并入。
         let metrics = {
             let s = &slots[0];
             let font =
                 FontRef::from_index(s.data.as_slice(), s.index as usize).expect("主字体解析失败");
-            compute_cell_metrics(&font, s.ppem)
+            compute_cell_metrics(&font, s.ppem, letter_spacing_px, line_height)
         };
 
         // ---- cjk 角色 ----
@@ -529,22 +545,38 @@ fn fit_fallback_ppem(data: &[u8], index: u32, main_ppem: f32, cell: &CellMetrics
 }
 
 /// 由字体度量计算等宽单元格尺寸（全部取整到物理像素，保证 1:1 对齐）。
-fn compute_cell_metrics(font: &FontRef, ppem: f32) -> CellMetrics {
+///
+/// `letter_spacing_px`：物理像素，加到 cell 宽度上（可负）。
+/// `line_height`：行高倍数（1.0 = 字体自身度量）。
+///
+/// 取整策略：cell 宽度用 **round（四舍五入）**，绝不用 ceil——ceil 会在小字号下
+/// 每格偷偷加 0.x 像素，视觉上就是「字距发散」。宽度是等宽网格唯一权威（铁律 4），
+/// 忠实主字体自身 advance 是默认行为，letter_spacing 才是用户显式微调入口。
+fn compute_cell_metrics(
+    font: &FontRef,
+    ppem: f32,
+    letter_spacing_px: f32,
+    line_height: f32,
+) -> CellMetrics {
     let m = font.metrics(&[]).scale(ppem);
 
     // 等宽字体：用 'M' 的 advance 作为 cell 宽度权威。
     let glyph_id = font.charmap().map('M');
     let advance = font.glyph_metrics(&[]).scale(ppem).advance_width(glyph_id);
 
-    let width = advance.round().max(1.0) as u32;
+    // 忠实 advance：round 而非 ceil；再叠加显式字距微调。
+    let width = (advance + letter_spacing_px).round().max(1.0) as u32;
 
-    // 行高 = ascent + descent + leading，向上取整保证不裁切。
+    // 行高 = (ascent + descent + leading) × line_height，向上取整保证不裁切。
     let ascent_f = m.ascent;
     let descent_f = m.descent;
     let leading_f = m.leading;
-    let height = (ascent_f + descent_f + leading_f).ceil().max(1.0) as u32;
+    let base_h = ascent_f + descent_f + leading_f;
+    let height = (base_h * line_height).ceil().max(1.0) as u32;
 
-    let ascent = ascent_f.round().max(1.0) as u32;
+    // 行高放大时，把字形垂直居中（基线相应下移半个增量），避免贴顶。
+    let extra = ((base_h * line_height) - base_h).max(0.0) * 0.5;
+    let ascent = (ascent_f + extra).round().max(1.0) as u32;
 
     // 下划线：置于基线下方约 descent 的一半处。
     let underline_thickness = m.stroke_size.round().max(1.0) as u32;
